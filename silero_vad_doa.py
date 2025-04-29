@@ -1,5 +1,3 @@
-#git test
-
 import sys
 import queue
 import math, time
@@ -7,11 +5,10 @@ import wave
 import pyaudio
 import threading
 import numpy as np
-import noisereduce as nr
 from collections import deque
 from gcc_phat import gcc_phat
 from matplotlib import pyplot as plt
-from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
+from silero_vad import load_silero_vad, get_speech_timestamps
 
 
 CHANNEL             = 6
@@ -21,7 +18,6 @@ SOUND_SPEED         = 343.2                                 # m/s
 MIC_DISTANCE_4      = 0.06463                               # 대각 방향의 마이크 거리(m)
 MAX_TDOA_4          = MIC_DISTANCE_4 / float(SOUND_SPEED)   # 대각방향의 마이크 입력 시간차
 VAD_MAX_CHUNK_SIZE  = 8000
-c = 0
 
 class MicArray(object):
     def __init__(self, rate=16000, channels=6, chunk_size=None):
@@ -34,6 +30,8 @@ class MicArray(object):
         self.chunk_size         = chunk_size if chunk_size else rate / 100
         self.graph_data         = []
         self.queue_input_flag   = False
+        self.rms_chunk_size     = 800
+        self.threshold          = 2.5
 
         device_index = None
         for i in range(self.pyaudio_instance.get_device_count()):               #PC에 연결된 마이크 장치 read.
@@ -60,31 +58,36 @@ class MicArray(object):
         )
 
     def _callback(self, in_data, frame_count, time_info, status):
-        global c
         with self.lock:
             self.dqueue.append(in_data)
-            self.queue_input_flag = True
-            c += 1
         return None, pyaudio.paContinue
     
     def start(self):
         self.dqueue.clear()
         self.stream.start_stream()
 
-    def rms_(self, frames):
-        channel_mask = [1,2,3,4]
-        for ch in channel_mask:
-            rms = np.sqrt(np.mean(np.square(frames[ch::self.channels].astype('int32'))))
+    def rms_filter(self, chunk):
+        ck = np.array(chunk, copy=True)
+        rms = []
+        for j in range(0, len(ck)-self.rms_chunk_size, self.rms_chunk_size):
+            rms.append(np.sqrt(np.mean(np.square(ck[j:j+self.rms_chunk_size].astype('int32')))))
+        rms_mean = np.mean(rms)
+
+        for j in range(len(rms)):
+            if rms[j] > rms_mean*self.threshold:
+                start_idx = j * self.rms_chunk_size
+                ck[start_idx:start_idx + self.rms_chunk_size] = np.zeros(self.rms_chunk_size, dtype=ck.dtype)
+
+        return ck
 
     def read_chunks(self):
         self.quit_event.clear()
 
         while not self.quit_event.is_set():
-            if(len(self.dqueue) > 0 and self.queue_input_flag == True):
+            if(len(self.dqueue) > 0):
                 frames = b''.join(self.dqueue)
 
                 frames = np.frombuffer(frames, dtype='int16')
-                self.queue_input_flag = False
                 yield frames
             else: pass
     
@@ -119,7 +122,12 @@ class MicArray(object):
             theta = [0] * MIC_GROUP_N
             
             for i, v in enumerate(MIC_GROUP):
-                tau[i], _ = gcc_phat(buf[v[0]::CHANNEL], buf[v[1]::CHANNEL], fs=self.sample_rate, max_tau=MAX_TDOA_4, interp=32)
+                #rms filtering & calculate TDOA
+                tau[i], _ = gcc_phat(self.rms_filter(buf[v[0]::CHANNEL]), self.rms_filter(buf[v[1]::CHANNEL]), fs=self.sample_rate, max_tau=MAX_TDOA_4, interp=32, visualize=False)
+                
+                # only calculate TDOA
+                # tau[i], _ = gcc_phat(buf[v[0]::CHANNEL], buf[v[1]::CHANNEL], fs=self.sample_rate, max_tau=MAX_TDOA_4, interp=32, visualize=False)
+                
                 theta[i] = math.asin(tau[i] / MAX_TDOA_4) * 180 / math.pi
                 # print(theta[i])
                     
@@ -143,7 +151,6 @@ class MicArray(object):
 
 
 def main():
-    global c
     import signal
 
     is_quit = threading.Event()
@@ -151,49 +158,21 @@ def main():
         is_quit.set()
         print('Quit')
     signal.signal(signal.SIGINT, signal_handler)
-    
     silero_vad_model = load_silero_vad()
-    speech_array = []
-    count = 0
-
-    plt.ion()
-    fig, ax = plt.subplots()
-    ax.set_ylim(-32768, 32767)
-    i = 0
-    start = time.time()
     
     with MicArray(RATE, CHANNEL, CHUNK_SIZE) as mic:
         for chunk in mic.read_chunks():
-            
-            # print("VAD-DOA Hz : {:.2f}".format(1/(time.time()-start)))
-            # print("input audio chunk count : ", c)
-            c = 0
-            start = time.time()
             vad_audio_data1 = chunk[0::CHANNEL]
             vad_audio_data = vad_audio_data1.astype(np.float32) / 32768.0
             vad_audio_data = np.array(vad_audio_data, dtype=np.float32, copy=True)
             speech_timestamps = get_speech_timestamps(vad_audio_data, silero_vad_model)
-            count += 1
-            # print(time.time()-start)
+
             if len(speech_timestamps) > 0:
-                # start = time.time()
-                # print(speech_timestamps, count)
-                i += 1
-                # mic.save_audio(f'vad_cut/1/cut{i}.wav',vad_audio_data1.astype(np.int16).tobytes())
-                # if(i == 1):
-                #     speech_array.append(vad_audio_data1.astype(np.int16).tobytes())
-                # else:
-                #     speech_array.append(vad_audio_data1[7600:8000].astype(np.int16).tobytes())
-                
                 direction = mic.get_direction(chunk)
                 print("degree : ",int(direction))
-                # print(time.time()-start)
-                # pass
+
             if is_quit.is_set():
-                # print(len(speech_array))
-                # mic.save_audio(f'vad_cut/1/full.wav',b''.join(speech_array))
                 break
-            # print((time.time()-start))
 
 
 if __name__ == '__main__':
