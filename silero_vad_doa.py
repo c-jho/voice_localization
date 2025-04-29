@@ -123,10 +123,10 @@ class MicArray(object):
             
             for i, v in enumerate(MIC_GROUP):
                 #rms filtering & calculate TDOA
-                tau[i], _ = gcc_phat(self.rms_filter(buf[v[0]::CHANNEL]), self.rms_filter(buf[v[1]::CHANNEL]), fs=self.sample_rate, max_tau=MAX_TDOA_4, interp=32, visualize=False)
+                # tau[i], _ = gcc_phat(self.rms_filter(buf[v[0]::CHANNEL]), self.rms_filter(buf[v[1]::CHANNEL]), fs=self.sample_rate, max_tau=MAX_TDOA_4, interp=32)
                 
                 # only calculate TDOA
-                # tau[i], _ = gcc_phat(buf[v[0]::CHANNEL], buf[v[1]::CHANNEL], fs=self.sample_rate, max_tau=MAX_TDOA_4, interp=32, visualize=False)
+                tau[i], _ = gcc_phat(buf[v[0]::CHANNEL], buf[v[1]::CHANNEL], fs=self.sample_rate, max_tau=MAX_TDOA_4, interp=32)
                 
                 theta[i] = math.asin(tau[i] / MAX_TDOA_4) * 180 / math.pi
                 # print(theta[i])
