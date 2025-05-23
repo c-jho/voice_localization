@@ -15,7 +15,7 @@ class srp_phat:
         self.tdoa_lut       = self.generate_tdoa_table(self.grid_point)
         
 
-    def generate_hemisphere_grid(self, azimuth_step=6, elevation_step=5):
+    def generate_hemisphere_grid(self, azimuth_step=20, elevation_step=10):
         points = []
         count = 1
         step = azimuth_step
@@ -34,7 +34,21 @@ class srp_phat:
                 z = np.sin(elev_rad)
 
                 points.append([x,y,z])
-
+        # fig = plt.figure()
+        # ax = fig.add_subplot(111, projection='3d')
+        # ax.scatter(np.array(points)[:,0], np.array(points)[:,1], np.array(points)[:,2])
+        # mic_array = np.array(self.MIC_DIM)
+        # ax.scatter(mic_array[:, 0]*4,
+        #         mic_array[:, 1]*4,
+        #         mic_array[:, 2],
+        #         s=80, c='red', marker='o', label='Mic Positions')
+        # ax.set_title("Hemisphere Grid Points")
+        # ax.set_xlabel("X axis")
+        # ax.set_ylabel("Y axis")
+        # ax.set_zlabel("Z axis")
+        # plt.show()
+        # print("grid ok")
+        # print(len(points))
         return np.array(points)
 
 
