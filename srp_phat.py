@@ -47,7 +47,7 @@ class srp_phat:
                 dist_i = np.linalg.norm(src_pos - self.MIC_DIM[i])
                 dist_j = np.linalg.norm(src_pos - self.MIC_DIM[j])
                 expected_tdoa[point_idx, pair_idx] = (dist_i - dist_j) / SOUND_SPEED
-        # print("ex_tdoa ok")
+        
         return expected_tdoa
 
     def calc_srp_phat(self, signal, sample_rate=16000):
