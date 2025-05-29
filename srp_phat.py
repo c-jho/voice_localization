@@ -1,6 +1,8 @@
+import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from scipy.signal import butter, lfilter
 
 SOUND_SPEED         = 343.2
 
@@ -10,12 +12,34 @@ class srp_phat:
         self.mic_pairs      = mic_pairs
         self.MIC_DIM        = mic_dim 
         self.CHANNEL        = channel
+        
+        self.device         = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.grid_point     = self.generate_hemisphere_grid()
         self.tdoa_lut       = self.generate_tdoa_table(self.grid_point)
-        
 
-    def generate_hemisphere_grid(self, azimuth_step=20, elevation_step=10):
+        self.freqs          = np.fft.rfftfreq(16000, d=1/16000)
+        self.valid_idx      = (self.freqs > 300) & (self.freqs < 3400)
+        self.phase_shift    = self.calc_phase_shift()
+
+        # self.sc, self.ax    = self.plot_init(self.grid_point)
+
+
+    def calc_phase_shift(self):
+        tau_expanded   = self.tdoa_lut[:, :, np.newaxis]
+        
+        self.freqs     = self.freqs[self.valid_idx]
+        freqs_expanded = self.freqs[np.newaxis, np.newaxis, :]
+
+        phase_shift    = np.exp(1j * 2 * np.pi * freqs_expanded * tau_expanded)
+
+        phase_shift    = torch.from_numpy(phase_shift)
+        phase_shift    = phase_shift.to(self.device)
+
+        return phase_shift
+
+
+    def generate_hemisphere_grid(self, azimuth_step=6, elevation_step=5):
         points = []
         count = 1
         step = azimuth_step
@@ -34,21 +58,7 @@ class srp_phat:
                 z = np.sin(elev_rad)
 
                 points.append([x,y,z])
-        # fig = plt.figure()
-        # ax = fig.add_subplot(111, projection='3d')
-        # ax.scatter(np.array(points)[:,0], np.array(points)[:,1], np.array(points)[:,2])
-        # mic_array = np.array(self.MIC_DIM)
-        # ax.scatter(mic_array[:, 0]*4,
-        #         mic_array[:, 1]*4,
-        #         mic_array[:, 2],
-        #         s=80, c='red', marker='o', label='Mic Positions')
-        # ax.set_title("Hemisphere Grid Points")
-        # ax.set_xlabel("X axis")
-        # ax.set_ylabel("Y axis")
-        # ax.set_zlabel("Z axis")
-        # plt.show()
-        # print("grid ok")
-        # print(len(points))
+
         return np.array(points)
 
 
@@ -64,15 +74,15 @@ class srp_phat:
         
         return expected_tdoa
 
+    
     def calc_srp_phat(self, signal, sample_rate=16000):
         sig = [0,0,0,0]
         for i in range(4): sig[i] = signal[i+1::self.CHANNEL]
         signal_ = np.array([sig[0],sig[1],sig[2],sig[3]])
 
         G = []
-        n = signal_[0].shape[0]
-        freqs = np.fft.rfftfreq(n, d=1/sample_rate)
-
+        n = signal_[0].shape[0] + signal_[1].shape[0]
+        
         # 각 mic pair 별 주파수 영역 위상차 계산
         for pair_idx, (i, j) in enumerate(self.mic_pairs):
             Xi = np.fft.rfft(signal_[i], n=n)
@@ -82,23 +92,51 @@ class srp_phat:
         G = np.array(G)
 
         # 사람 음성 주파수 영역대 필터링
-        valid_idx = (freqs > 300) & (freqs < 4000)
-        freqs = freqs[valid_idx]
-        G = G[:, valid_idx]
-
+        G = G[:, self.valid_idx]
         srp_power = np.zeros(self.tdoa_lut.shape[0])
         
-        # 벡터화 하여 SRP 계산
-        tau_expanded = self.tdoa_lut[:, :, np.newaxis]                      # (P, M, 1)
-        freqs_expanded = freqs[np.newaxis, np.newaxis, :]                   # (1, 1, F)
-        phase_shift = np.exp(1j * 2 * np.pi * freqs_expanded * tau_expanded)# (P, M, F)
-        aligned = G[np.newaxis, :, :] * phase_shift                         # (P, M, F)
-        srp_power = np.sum(np.real(np.sum(aligned, axis=2)), axis=1)        # (P,)
+        # torch 사용해서 계산
+        G = torch.from_numpy(G[np.newaxis, :, :])
+        G = G.to(self.device)
+        aligned = G * self.phase_shift
+        srp_power = torch.sum(torch.real(torch.sum(aligned, axis=2)), axis=1)
+        ex_point = torch.argmax(srp_power)  # Power가 높은 index 추출
+
+        # torch 없이 numpy로 계산
+        # aligned = G[np.newaxis, :, :] * self.phase_shift
+        # srp_power = np.sum(np.real(np.sum(aligned, axis=2)), axis=1)
+        # ex_point = np.argmax(srp_power)   # Power가 높은 index 추출
         
-        # Power가 높은 index 추출
-        ex_point = np.argmax(srp_power)
+        # real-time srp_power 그래프 update
+        # self.update_plot(self.grid_point, srp_power.detach().cpu().numpy())
 
         # 해당 point의 degree 추출
         degree = np.degrees(np.arctan2(self.grid_point[ex_point, 1], self.grid_point[ex_point, 0]))
         degree = (degree + 360) % 360
         return degree
+    
+    def plot_init(self, gp):
+        x = gp[:, 0]
+        y = gp[:, 1]
+        z = gp[:, 2]
+        plt.ion()
+        fig = plt.figure(figsize=(20,15))
+        ax = fig.add_subplot(111, projection='3d')
+        sc = ax.scatter(x, y, z, c=np.zeros_like(x), cmap='jet', s=20)
+        cb = fig.colorbar(sc, ax=ax, label='SRP Power')
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+        ax.set_title("SRP-PHAT Real-Time")
+        plt.tight_layout()
+
+        return sc, ax
+    
+    def update_plot(self, gp, srp):
+        x = gp[:, 0]
+        y = gp[:, 1]
+        z = gp[:, 2]
+        self.sc.remove()
+        self.sc = self.ax.scatter(x, y, z, c=srp, cmap='jet', s=20)
+        plt.draw()
+        plt.pause(0.005)

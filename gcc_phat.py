@@ -1,32 +1,30 @@
-"""
- Estimate time delay using GCC-PHAT 
- Copyright (c) 2017 Yihui Xiong
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-     http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
-"""
-
 import numpy as np
 import math
 
 SOUND_SPEED         = 343.2
+RMS_CHUNK_SIZE      = 800
 
 #GCC_PHAT(Generalized Cross Correlation-Phase Transform)
 class gcc_phat:
     def __init__(self, channel, mic_dist):
         self.CHANNEL    = channel
         self.MAX_TDOA_4 = mic_dist / float(SOUND_SPEED)
+        self.threshold          = 2.5
 
+    def rms_filter(self, chunk):
+        ck = np.array(chunk, copy=True)
+        rms = []
+        for j in range(0, len(ck)-RMS_CHUNK_SIZE, RMS_CHUNK_SIZE):
+            rms.append(np.sqrt(np.mean(np.square(ck[j:j+RMS_CHUNK_SIZE].astype('int32')))))
+        rms_mean = np.mean(rms)
 
+        for j in range(len(rms)):
+            if rms[j] > rms_mean*self.threshold:
+                start_idx = j * RMS_CHUNK_SIZE
+                ck[start_idx:start_idx + RMS_CHUNK_SIZE] = np.zeros(RMS_CHUNK_SIZE, dtype=ck.dtype)
+
+        return ck
+    
     def gcc_phat(self, sig, refsig, fs=1, max_tau=None, interp=16):
         '''
         This function computes the offset between the signal sig and the reference signal refsig
@@ -59,7 +57,7 @@ class gcc_phat:
 
         return tau, cc
     
-
+    
     def calc_gcc_phat(self, buf, sample_rate=16000):
         best_guess = None
 
@@ -71,10 +69,10 @@ class gcc_phat:
         
         for i, v in enumerate(MIC_GROUP):
             #rms filtering & calculate TDOA
-            # tau[i], _ = gcc_phat(self.rms_filter(buf[v[0]::CHANNEL]), self.rms_filter(buf[v[1]::CHANNEL]), fs=self.sample_rate, max_tau=MAX_TDOA_4, interp=32)
+            tau[i], _ = self.gcc_phat(self.rms_filter(buf[v[0]::self.CHANNEL]), self.rms_filter(buf[v[1]::self.CHANNEL]), fs=sample_rate, max_tau=self.MAX_TDOA_4, interp=32)
             
             # only calculate TDOA
-            tau[i], _ = self.gcc_phat(buf[v[0]::self.CHANNEL], buf[v[1]::self.CHANNEL], fs=sample_rate, max_tau=self.MAX_TDOA_4, interp=32)
+            # tau[i], _ = self.gcc_phat(buf[v[0]::self.CHANNEL], buf[v[1]::self.CHANNEL], fs=sample_rate, max_tau=self.MAX_TDOA_4, interp=32)
             
             theta[i] = math.asin(tau[i] / self.MAX_TDOA_4) * 180 / math.pi
                 

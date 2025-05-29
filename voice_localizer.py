@@ -6,13 +6,13 @@ import numpy as np
 from collections import deque
 from gcc_phat import gcc_phat
 from srp_phat import srp_phat
+# from dxl_controller import dxl_controller
 from matplotlib import pyplot as plt
 from silero_vad import load_silero_vad, get_speech_timestamps
 
 CHANNEL             = 6
 MIC_DISTANCE_4      = 0.06463                               # 대각 방향의 마이크 거리(m)
 CHUNK_SIZE          = 400                                   
-RMS_CHUNK_SIZE      = 800
 VAD_MAX_CHUNK_SIZE  = 8000
 RATE                = 16000                                 # 초당 샘플 수
 
@@ -36,15 +36,16 @@ class MicArray(object):
         self.channels           = channels
         self.sample_rate        = rate
         self.chunk_size         = chunk_size if chunk_size else rate / 100
-        self.threshold          = 2.5
+
+        # self.dxl                = dxl_controller('/dev/ttyU2D2')
 
         device_index = None
         for i in range(self.pyaudio_instance.get_device_count()):               #PC에 연결된 마이크 장치 read.
             dev = self.pyaudio_instance.get_device_info_by_index(i)             #마이크 장치 번호 저장
             name = dev['name'].encode('utf-8')                                  #마이크 장치 이름 저장
-            print(i, name, dev['maxInputChannels'], dev['maxOutputChannels'])   
+            # print(i, name, dev['maxInputChannels'], dev['maxOutputChannels'])   
             if dev['maxInputChannels'] == self.channels:                        #사용할 마이크 channel수와 동일한 장치 확인
-                print('Use {}'.format(name))
+                print('\nUse {}'.format(name))
                 device_index = i                                                #사용할 마이크 장치번호 저장
                 break
 
@@ -71,20 +72,6 @@ class MicArray(object):
         self.dqueue.clear()
         self.stream.start_stream()
 
-    def rms_filter(self, chunk):
-        ck = np.array(chunk, copy=True)
-        rms = []
-        for j in range(0, len(ck)-RMS_CHUNK_SIZE, RMS_CHUNK_SIZE):
-            rms.append(np.sqrt(np.mean(np.square(ck[j:j+RMS_CHUNK_SIZE].astype('int32')))))
-        rms_mean = np.mean(rms)
-
-        for j in range(len(rms)):
-            if rms[j] > rms_mean*self.threshold:
-                start_idx = j * RMS_CHUNK_SIZE
-                ck[start_idx:start_idx + RMS_CHUNK_SIZE] = np.zeros(RMS_CHUNK_SIZE, dtype=ck.dtype)
-
-        return ck
-
     def read_chunks(self):
         self.quit_event.clear()
 
@@ -98,6 +85,7 @@ class MicArray(object):
     def stop(self):
         self.quit_event.set()
         self.stream.stop_stream()
+        # self.dxl.close_dxl()
 
     def __enter__(self):
         self.start()
@@ -138,6 +126,7 @@ def main(DOA_MODE):
                 start = time.time()
                 if DOA_MODE == GCC : degree = gcc_phat_.calc_gcc_phat(chunk)
                 elif DOA_MODE == SRP : degree = srp_phat_.calc_srp_phat(chunk)
+                # mic.dxl.dxl_control_pos((int)(degree*4095/360))
                 print("deg:{:.1f}".format(degree), "| calc_time:{:.3f}".format(time.time() - start))
 
             if is_quit.is_set():
